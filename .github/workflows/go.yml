@@ -29,8 +29,10 @@ jobs:
       run: go build -v .
     - name: Test
       run: go test -v .
-    - name: Lint
-      run: golint -set_exit_status ./...
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v1.2.1
+      with:
+        only-new-issues: true
     - name: Golang Formatter
       uses: sladyn98/auto-go-format@master
       env:
