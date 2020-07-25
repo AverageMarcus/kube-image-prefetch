@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-
+// Run triggers the copy of this binary to the provided destination
 func Run(dest string) error {
 	original, err := os.Open(os.Args[0])
 	if err != nil {
@@ -19,9 +19,10 @@ func Run(dest string) error {
 	}
 	defer new.Close()
 
-	io.Copy(new, original)
+	_, err = io.Copy(new, original)
+	if err != nil {
+		return err
+	}
 
-	os.Chmod(dest, 0777)
-
-	return nil
+	return os.Chmod(dest, 0777)
 }

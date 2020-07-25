@@ -8,5 +8,5 @@ require (
 	k8s.io/api v0.17.0
 	k8s.io/apimachinery v0.17.0
 	k8s.io/client-go v0.17.0
-	k8s.io/utils v0.0.0-20200720150651-0bdb4ca86cbc // indirect
+	k8s.io/utils v0.0.0-20200720150651-0bdb4ca86cbc
 )

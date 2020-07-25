@@ -1,160 +1,114 @@
 package operator
 
 import (
-	"fmt"
-	"time"
+	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/pointer"
+
+	"kube-image-prefetch/internal/controller"
+	"kube-image-prefetch/internal/prefetcher"
 )
 
 const (
 	namespace = "default"
 	name      = "kube-image-prefetch"
 	image     = "averagemarcus/kube-image-prefetch:latest"
-	timeout   = 15 * time.Minute
 )
 
+// Run triggers the operator to watch deployments and update the prefetcher daemonset
 func Run() error {
 	clientset, err := getClient()
 	if err != nil {
 		return err
 	}
 
+	ds, err := clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
+	if err != nil {
+		ds = prefetcher.CreateDaemonSet(getSelfOwnerReference(clientset)...)
+		ds, err = clientset.AppsV1().DaemonSets(namespace).Create(ds)
+		if err != nil {
+			return err
+		}
+	}
+
+	imageChan := make(chan controller.Images, 1)
+	controller.Start(clientset, imageChan)
+
+	toPrefetch := map[string]controller.Images{}
 	for {
-		deployments, err := getDeployments(clientset)
-		if err != nil {
-			return err
-		}
+		img := <-imageChan
 
-		images, pullSecrets := parseDeployments(deployments)
-
-		ds, _ := clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
-		if ds == nil || ds.ObjectMeta.Name == "" {
-			ds = buildDaemonSet()
-		}
-
-		ds.Spec.Template.Spec.Containers = []corev1.Container{}
-		ds.Spec.Template.Spec.ImagePullSecrets = pullSecrets
-
-		i := 0
-		for img := range images {
-			ds.Spec.Template.Spec.Containers = append(
-				ds.Spec.Template.Spec.Containers,
-				buildPrefetchContainer(img, i),
-			)
-			i++
-		}
-
-		if ds.ResourceVersion == "" {
-			ds, err = clientset.AppsV1().DaemonSets("default").Create(ds)
+		if img.Images == nil {
+			delete(toPrefetch, img.ID)
 		} else {
-			ds, err = clientset.AppsV1().DaemonSets("default").Update(ds)
+			toPrefetch[img.ID] = img
 		}
+
+		images := []string{}
+		pullSecrets := []corev1.LocalObjectReference{}
+
+		for _, v := range toPrefetch {
+			images = append(images, v.Images...)
+			pullSecrets = append(pullSecrets, v.PullSecrets...)
+		}
+
+		ds, _ = clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
+		ds, err = clientset.AppsV1().DaemonSets(namespace).Patch(name, types.JSONPatchType, prefetcher.GeneratePatch(dedupe(images), pullSecrets))
 		if err != nil {
 			return err
 		}
-
-		time.Sleep(timeout)
 	}
 }
 
 func getClient() (*kubernetes.Clientset, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, err
+		kubeconfigPath := os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			kubeconfigPath = os.Getenv("HOME") + "/.kube/config"
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	}
 
 	return kubernetes.NewForConfig(config)
 }
 
-func getDeployments(clientset *kubernetes.Clientset) ([]appsv1.Deployment, error) {
-	dps, err := clientset.AppsV1().Deployments(metav1.NamespaceAll).List(metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
+func dedupe(a []string) []string {
+	tempMap := map[string]bool{}
+	dest := []string{}
 
-	return dps.Items, nil
-}
-
-func parseDeployments(deployments []appsv1.Deployment) (map[string]bool, []corev1.LocalObjectReference) {
-	images := map[string]bool{}
-	pullSecrets := []corev1.LocalObjectReference{}
-	for _, dp := range deployments {
-		for _, container := range append(dp.Spec.Template.Spec.Containers, dp.Spec.Template.Spec.InitContainers...) {
-			images[container.Image] = true
+	for _, obj := range a {
+		if !tempMap[obj] {
+			tempMap[obj] = true
+			dest = append(dest, obj)
 		}
-		pullSecrets = append(pullSecrets, dp.Spec.Template.Spec.ImagePullSecrets...)
 	}
 
-	return images, pullSecrets
+	return dest
 }
 
-func buildDaemonSet() *appsv1.DaemonSet {
-	labels := map[string]string{
-		"app": name,
-	}
-	return &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: labels,
-		},
-		Spec: appsv1.DaemonSetSpec{
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					InitContainers: []corev1.Container{{
-						Name:            "init",
-						Image:           image,
-						ImagePullPolicy: corev1.PullAlways,
-						Args: []string{
-							"-command", "copy",
-							"-dest", "/mount/sleep",
-						},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "share",
-							MountPath: "/mount",
-						}},
-					}},
-					Containers:       []corev1.Container{},
-					ImagePullSecrets: []corev1.LocalObjectReference{},
-					Volumes: []corev1.Volume{{
-						Name: "share",
-						VolumeSource: corev1.VolumeSource{
-							EmptyDir: &corev1.EmptyDirVolumeSource{},
-						},
-					}},
-				},
-			},
-		},
-	}
-}
+func getSelfOwnerReference(clientset *kubernetes.Clientset) []metav1.OwnerReference {
+	ownerReference := []metav1.OwnerReference{}
 
-func buildPrefetchContainer(img string, index int) corev1.Container {
-	return corev1.Container{
-		Name:            fmt.Sprintf("prefetch-%d", index),
-		Image:           img,
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"/mount/sleep"},
-		Args:            []string{"-command", "sleep"},
-		VolumeMounts: []corev1.VolumeMount{{
-			Name:      "share",
-			MountPath: "/mount",
-		}},
-		Resources: corev1.ResourceRequirements{
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("1m"),
-				corev1.ResourceMemory: resource.MustParse("10M"),
-			},
-		},
+	self, err := clientset.AppsV1().Deployments("kube-system").Get("kube-image-prefetch-manager", metav1.GetOptions{})
+	if err != nil {
+		return ownerReference
 	}
+
+	ownerReference = append(ownerReference, metav1.OwnerReference{
+		APIVersion: appsv1.SchemeGroupVersion.Identifier(),
+		Kind:       "Deployment",
+		Name:       self.ObjectMeta.Name,
+		UID:        self.ObjectMeta.UID,
+		Controller: pointer.BoolPtr(true),
+	})
+
+	return ownerReference
 }
