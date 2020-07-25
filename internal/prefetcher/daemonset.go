@@ -16,19 +16,22 @@ const (
 	image     = "averagemarcus/kube-image-prefetch:latest"
 )
 
+// ContainerPatch is a JSON Patch for the Containers property
 type ContainerPatch struct {
 	Op    string             `json:"op"`
 	Path  string             `json:"path"`
 	Value []corev1.Container `json:"value"`
 }
 
+// PullSecretsPatch is a JSON Patch for the PullSecrets property
 type PullSecretsPatch struct {
 	Op    string                        `json:"op"`
 	Path  string                        `json:"path"`
 	Value []corev1.LocalObjectReference `json:"value"`
 }
 
-func CreateDaemonset() *appsv1.DaemonSet {
+// CreateDaemonSet generates a new DaemonSet for kube-image-prefetch
+func CreateDaemonSet() *appsv1.DaemonSet {
 	labels := map[string]string{
 		"app": name,
 	}
@@ -90,6 +93,7 @@ func CreateDaemonset() *appsv1.DaemonSet {
 	return ds
 }
 
+// GeneratePatch creates the JSON Patch for the provided images and pull secrets
 func GeneratePatch(images []string, pullSecrets []corev1.LocalObjectReference) []byte {
 	containers := []corev1.Container{}
 	for i, img := range images {

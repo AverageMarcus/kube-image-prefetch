@@ -5,6 +5,7 @@ import (
 	"os"
 )
 
+// Run triggers the copy of this binary to the provided destination
 func Run(dest string) error {
 	original, err := os.Open(os.Args[0])
 	if err != nil {

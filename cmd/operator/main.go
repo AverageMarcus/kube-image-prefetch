@@ -20,6 +20,7 @@ const (
 	image     = "averagemarcus/kube-image-prefetch:latest"
 )
 
+// Run triggers the operator to watch deployments and update the prefetcher daemonset
 func Run() error {
 	clientset, err := getClient()
 	if err != nil {
@@ -28,7 +29,7 @@ func Run() error {
 
 	ds, err := clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
-		ds = prefetcher.CreateDaemonset()
+		ds = prefetcher.CreateDaemonSet()
 		ds, err = clientset.AppsV1().DaemonSets(namespace).Create(ds)
 		if err != nil {
 			return err
