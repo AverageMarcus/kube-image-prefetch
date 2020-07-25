@@ -1,23 +1,23 @@
 package operator
 
 import (
-	"kube-image-prefetch/internal/prefetcher"
 	"os"
-	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"kube-image-prefetch/internal/controller"
+	"kube-image-prefetch/internal/prefetcher"
 )
 
 const (
 	namespace = "default"
 	name      = "kube-image-prefetch"
 	image     = "averagemarcus/kube-image-prefetch:latest"
-	timeout   = 15 * time.Minute
 )
 
 func Run() error {
@@ -26,31 +26,41 @@ func Run() error {
 		return err
 	}
 
+	ds, err := clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
+	if err != nil {
+		ds = prefetcher.CreateDaemonset()
+		ds, err = clientset.AppsV1().DaemonSets(namespace).Create(ds)
+		if err != nil {
+			return err
+		}
+	}
+
+	imageChan := make(chan controller.Images, 1)
+	controller.Start(clientset, imageChan)
+
+	toPrefetch := map[string]controller.Images{}
 	for {
-		deployments, err := getDeployments(clientset)
-		if err != nil {
-			return err
-		}
+		img := <-imageChan
 
-		images, pullSecrets := parseDeployments(deployments)
-
-		ds := prefetcher.BuildDaemonset(images, pullSecrets)
-
-		existingDs, err := clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
-		if err == nil {
-			ds.ResourceVersion = existingDs.ResourceVersion
-		}
-
-		if ds.ResourceVersion == "" {
-			ds, err = clientset.AppsV1().DaemonSets("default").Create(ds)
+		if img.Images == nil {
+			delete(toPrefetch, img.ID)
 		} else {
-			ds, err = clientset.AppsV1().DaemonSets("default").Update(ds)
+			toPrefetch[img.ID] = img
 		}
+
+		images := []string{}
+		pullSecrets := []corev1.LocalObjectReference{}
+
+		for _, v := range toPrefetch {
+			images = append(images, v.Images...)
+			pullSecrets = append(pullSecrets, v.PullSecrets...)
+		}
+
+		ds, _ = clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
+		ds, err = clientset.AppsV1().DaemonSets(namespace).Patch(name, types.JSONPatchType, prefetcher.GeneratePatch(dedupe(images), pullSecrets))
 		if err != nil {
 			return err
 		}
-
-		time.Sleep(timeout)
 	}
 }
 
@@ -67,29 +77,16 @@ func getClient() (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(config)
 }
 
-func getDeployments(clientset *kubernetes.Clientset) ([]appsv1.Deployment, error) {
-	dps, err := clientset.AppsV1().Deployments(metav1.NamespaceAll).List(metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
+func dedupe(a []string) []string {
+	tempMap := map[string]bool{}
+	dest := []string{}
 
-	return dps.Items, nil
-}
-
-func parseDeployments(deployments []appsv1.Deployment) ([]string, []corev1.LocalObjectReference) {
-	imagesMap := map[string]bool{}
-	pullSecrets := []corev1.LocalObjectReference{}
-	for _, dp := range deployments {
-		for _, container := range append(dp.Spec.Template.Spec.Containers, dp.Spec.Template.Spec.InitContainers...) {
-			imagesMap[container.Image] = true
+	for _, obj := range a {
+		if !tempMap[obj] {
+			tempMap[obj] = true
+			dest = append(dest, obj)
 		}
-		pullSecrets = append(pullSecrets, dp.Spec.Template.Spec.ImagePullSecrets...)
 	}
 
-	images := []string{}
-	for img := range imagesMap {
-		images = append(images, img)
-	}
-
-	return images, pullSecrets
+	return dest
 }

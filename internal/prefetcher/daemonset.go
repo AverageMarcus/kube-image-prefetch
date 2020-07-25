@@ -1,6 +1,7 @@
 package prefetcher
 
 import (
+	"encoding/json"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,7 +16,19 @@ const (
 	image     = "averagemarcus/kube-image-prefetch:latest"
 )
 
-func BuildDaemonset(images []string, pullSecrets []corev1.LocalObjectReference) *appsv1.DaemonSet {
+type ContainerPatch struct {
+	Op    string             `json:"op"`
+	Path  string             `json:"path"`
+	Value []corev1.Container `json:"value"`
+}
+
+type PullSecretsPatch struct {
+	Op    string                        `json:"op"`
+	Path  string                        `json:"path"`
+	Value []corev1.LocalObjectReference `json:"value"`
+}
+
+func CreateDaemonset() *appsv1.DaemonSet {
 	labels := map[string]string{
 		"app": name,
 	}
@@ -47,8 +60,22 @@ func BuildDaemonset(images []string, pullSecrets []corev1.LocalObjectReference) 
 							MountPath: "/mount",
 						}},
 					}},
-					Containers:       []corev1.Container{},
-					ImagePullSecrets: pullSecrets,
+					Containers: []corev1.Container{
+						{
+							Name:            "pending",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"/mount/sleep"},
+							Args:            []string{"-command", "sleep"},
+							Resources: corev1.ResourceRequirements{
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("1m"),
+									corev1.ResourceMemory: resource.MustParse("10M"),
+								},
+							},
+						},
+					},
+					ImagePullSecrets: []corev1.LocalObjectReference{},
 					Volumes: []corev1.Volume{{
 						Name: "share",
 						VolumeSource: corev1.VolumeSource{
@@ -60,14 +87,28 @@ func BuildDaemonset(images []string, pullSecrets []corev1.LocalObjectReference) 
 		},
 	}
 
+	return ds
+}
+
+func GeneratePatch(images []string, pullSecrets []corev1.LocalObjectReference) []byte {
+	containers := []corev1.Container{}
 	for i, img := range images {
-		ds.Spec.Template.Spec.Containers = append(
-			ds.Spec.Template.Spec.Containers,
-			buildPrefetchContainer(img, i),
-		)
+		containers = append(containers, buildPrefetchContainer(img, i))
 	}
 
-	return ds
+	payload, _ := json.Marshal([]interface{}{
+		ContainerPatch{
+			Op:    "replace",
+			Path:  "/spec/template/spec/containers",
+			Value: containers,
+		},
+		PullSecretsPatch{
+			Op:    "replace",
+			Path:  "/spec/template/spec/imagePullSecrets",
+			Value: pullSecrets,
+		},
+	})
+	return payload
 }
 
 func buildPrefetchContainer(img string, index int) corev1.Container {
