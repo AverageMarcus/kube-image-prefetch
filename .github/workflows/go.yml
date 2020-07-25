@@ -30,7 +30,9 @@ jobs:
     - name: Test
       run: go test -v .
     - name: Run golangci-lint
-      uses: actions-contrib/golangci-lint@v1
+      run: |
+        go get -u golang.org/x/lint/golint
+        golint -set_exit_status ./...
     - name: Golang Formatter
       uses: sladyn98/auto-go-format@master
       env:
