@@ -3,12 +3,14 @@ package operator
 import (
 	"os"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/utils/pointer"
 
 	"kube-image-prefetch/internal/controller"
 	"kube-image-prefetch/internal/prefetcher"
@@ -29,7 +31,7 @@ func Run() error {
 
 	ds, err := clientset.AppsV1().DaemonSets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
-		ds = prefetcher.CreateDaemonSet()
+		ds = prefetcher.CreateDaemonSet(getSelfOwnerReference(clientset)...)
 		ds, err = clientset.AppsV1().DaemonSets(namespace).Create(ds)
 		if err != nil {
 			return err
@@ -90,4 +92,23 @@ func dedupe(a []string) []string {
 	}
 
 	return dest
+}
+
+func getSelfOwnerReference(clientset *kubernetes.Clientset) []metav1.OwnerReference {
+	ownerReference := []metav1.OwnerReference{}
+
+	self, err := clientset.AppsV1().Deployments("kube-system").Get("kube-image-prefetch-manager", metav1.GetOptions{})
+	if err != nil {
+		return ownerReference
+	}
+
+	ownerReference = append(ownerReference, metav1.OwnerReference{
+		APIVersion: appsv1.SchemeGroupVersion.Identifier(),
+		Kind:       "Deployment",
+		Name:       self.ObjectMeta.Name,
+		UID:        self.ObjectMeta.UID,
+		Controller: pointer.BoolPtr(true),
+	})
+
+	return ownerReference
 }

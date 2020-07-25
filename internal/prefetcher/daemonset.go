@@ -31,15 +31,16 @@ type PullSecretsPatch struct {
 }
 
 // CreateDaemonSet generates a new DaemonSet for kube-image-prefetch
-func CreateDaemonSet() *appsv1.DaemonSet {
+func CreateDaemonSet(ownerReference ...metav1.OwnerReference) *appsv1.DaemonSet {
 	labels := map[string]string{
 		"app": name,
 	}
 
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: labels,
+			Name:            name,
+			Labels:          labels,
+			OwnerReferences: ownerReference,
 		},
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{
