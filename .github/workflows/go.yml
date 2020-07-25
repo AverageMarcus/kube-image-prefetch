@@ -32,7 +32,7 @@ jobs:
     - name: Run golangci-lint
       uses: golangci/golangci-lint-action@v2.0.0
       with:
-        varsion: v1.29.0
+        version: v1.29.0
         only-new-issues: true
     - name: Golang Formatter
       uses: sladyn98/auto-go-format@master
