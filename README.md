@@ -2,8 +2,6 @@
 
 > Pre-pull all images, on all nodes, within a Kubernetes cluster
 
-⚠️ Very early alpha release. Not yet for production use.
-
 ## Features
 
 * Pull all images used by deployments in the cluster on all nodes
