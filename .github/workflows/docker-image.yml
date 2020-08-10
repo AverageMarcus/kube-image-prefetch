@@ -11,10 +11,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Build and push Docker images
-      uses: docker/build-push-action@v1.1.0
+
+    - name: Prepare
+      id: prepare
+      run: |
+        DOCKER_IMAGE=averagemarcus/kube-image-prefetch
+        DOCKER_PLATFORMS=linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/386,linux/ppc64le,linux/s390x
+
+        VERSION=latest
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+        fi
+
+        TAGS="--tag ${DOCKER_IMAGE}:${VERSION}"
+        if [[ $VERSION =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+          TAGS="$TAGS --tag ${DOCKER_IMAGE}:latest"
+        fi
+
+        echo ::set-output name=tags::${TAGS}
+        echo ::set-output name=platforms::${DOCKER_PLATFORMS}
+
+    - name: Set up Docker Buildx
+      uses: crazy-max/ghaction-docker-buildx@v3
+
+    - name: Cache Docker layers
+      uses: actions/cache@v2
+      id: cache
       with:
-        username: averagemarcus
-        password: ${{ secrets.DOCKER_TOKEN }}
-        repository: averagemarcus/kube-image-prefetch
-        tag_with_ref: true
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Docker Buildx (build)
+      run: |
+        docker buildx build \
+          --cache-from "type=local,src=/tmp/.buildx-cache" \
+          --cache-to "type=local,dest=/tmp/.buildx-cache" \
+          --platform ${{ steps.prepare.outputs.platforms }} \
+          --output "type=image,push=false" \
+          ${{ steps.prepare.outputs.tags }} \
+          .
+
+    - name: Docker Login
+      env:
+        DOCKER_USERNAME: averagemarcus
+        DOCKER_PASSWORD: ${{ secrets.DOCKER_TOKEN }}
+      run: |
+        echo "${DOCKER_PASSWORD}" | docker login --username "${DOCKER_USERNAME}" --password-stdin
+
+    - name: Docker Buildx (push)
+      run: |
+        docker buildx build \
+          --cache-from "type=local,src=/tmp/.buildx-cache" \
+          --cache-to "type=local,dest=/tmp/.buildx-cache" \
+          --platform ${{ steps.prepare.outputs.platforms }} \
+          --output "type=image,push=true" \
+          ${{ steps.prepare.outputs.tags }} \
+          .
