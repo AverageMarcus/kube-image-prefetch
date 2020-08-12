@@ -6,6 +6,8 @@
 
 * Pull all images used by deployments in the cluster on all nodes
 * Watch for new, changed or removed deployments and pre-fetch images on all nodes
+* Ignore deployments with annotation `kube-image-prefetch/ignore: "true"`
+* Ignore specific containers with annotation `kube-image-prefetch/ignore-containers: "container-name"`. Multiple containers within a pod can be specified as a comma separated list.
 
 ## Install
 
