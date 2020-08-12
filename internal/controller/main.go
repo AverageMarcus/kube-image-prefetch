@@ -124,11 +124,16 @@ func (w *Worker) processItem(newEvent Event) error {
 		fallthrough
 	case updatedAction:
 		dp := obj.(*appsv1.Deployment)
-		w.imageChan <- Images{
-			ID:          newEvent.Key,
-			Images:      getImages(*dp),
-			PullSecrets: dp.Spec.Template.Spec.ImagePullSecrets,
+		images := getImages(*dp)
+		if len(images) > 0 {
+			w.imageChan <- Images{
+				ID:          newEvent.Key,
+				Images:      images,
+				PullSecrets: dp.Spec.Template.Spec.ImagePullSecrets,
+			}
+			return nil
 		}
+		fallthrough
 	case deletedAction:
 		w.imageChan <- Images{
 			ID:          newEvent.Key,
@@ -137,14 +142,4 @@ func (w *Worker) processItem(newEvent Event) error {
 		}
 	}
 	return nil
-}
-
-func getImages(dp appsv1.Deployment) []string {
-	images := []string{}
-
-	for _, container := range append(dp.Spec.Template.Spec.InitContainers, dp.Spec.Template.Spec.Containers...) {
-		images = append(images, container.Image)
-	}
-
-	return images
 }

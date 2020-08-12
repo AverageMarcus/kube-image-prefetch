@@ -21,7 +21,7 @@ format:
 
 .PHONY: run-tests # Runs all tests
 run-tests:
-	@go test
+	@go test ./...
 
 .PHONY: fetch-deps # Fetch all project dependencies
 fetch-deps:
